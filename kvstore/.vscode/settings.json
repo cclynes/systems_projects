@@ -1,0 +1,13 @@
+{
+    "files.associations": {
+        "optional": "cpp",
+        "condition_variable": "cpp",
+        "vector": "cpp",
+        "cassert": "cpp",
+        "iostream": "cpp",
+        "system_error": "cpp",
+        "chrono": "cpp"
+    },
+    "C_Cpp.default.cppStandard": "c++20",
+    "C_Cpp.default.cStandard": "c17",
+}
