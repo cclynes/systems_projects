@@ -5,6 +5,8 @@
 // TODO: define global variables needed for your snake! (part 1A)
 
 // Definition of global variables for game status.
+char* g_name = NULL;
+size_t g_name_len;
 int g_game_over;
 int g_score;
 

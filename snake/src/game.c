@@ -33,6 +33,103 @@ void update(int* cells, size_t width, size_t height, snake_t* snake_p,
     // walls, so it does not handle the case where a snake runs off the board.
 
     // TODO: implement!
+    
+    enum snake_direction old_dir = snake_p->snake_dir;
+    size_t snake_len = (size_t)ll_length(snake_p->snake_pos);
+
+    // change snake direction according to input
+    switch (input) {
+        case INPUT_NONE:
+            break;
+        case INPUT_DOWN:
+            if (!(snake_len > 1) || (old_dir != UP)) {
+                snake_p->snake_dir = DOWN;
+            }
+            break;
+        case INPUT_UP:
+            if (!(snake_len > 1) || (old_dir != DOWN)) {
+                snake_p->snake_dir = UP;
+            }
+            break;
+        case INPUT_LEFT:
+            if (!(snake_len > 1) || (old_dir != RIGHT)) {
+                snake_p->snake_dir = LEFT;
+            }
+            break;
+        case INPUT_RIGHT:
+            if (!(snake_len > 1) || (old_dir != LEFT)) {
+                snake_p->snake_dir = RIGHT;
+            }
+            break;
+    }
+
+    // find next square
+    size_t head_val = *(size_t *) ll_get_first(snake_p->snake_pos);
+    size_t *new_cell_p = malloc(sizeof(*new_cell_p));
+    if (!new_cell_p) { abort(); }
+
+    switch (snake_p->snake_dir) {
+        case UP:
+            *new_cell_p = head_val - width;
+            break;
+        case DOWN:
+            *new_cell_p = head_val + width;
+            break;
+        case RIGHT:
+            *new_cell_p = head_val + 1;
+            break;
+        case LEFT:
+            *new_cell_p = head_val - 1;
+            break;
+    }
+
+    // end game if next square is a wall or snake
+    size_t *tail = (size_t *) ll_get_last(snake_p->snake_pos);
+    if ((cells[*new_cell_p] & FLAG_WALL) || ((cells[*new_cell_p] & FLAG_SNAKE) && (*tail != *new_cell_p))) {
+
+        free(new_cell_p);
+        g_game_over = 1;
+        return;
+    }
+
+    // lengthen snake at head
+    ll_insert_first(&(snake_p->snake_pos), new_cell_p);
+
+    // fill cell at head
+    cells[*new_cell_p] |= FLAG_SNAKE;
+
+    // increment score and replace food if next square is food
+    if ((cells[*new_cell_p] & FLAG_FOOD)) {
+        g_score += 1;
+        cells[*new_cell_p] &= ~FLAG_FOOD;
+        place_food(cells, width, height);
+        
+        // if snake isn't growing, we need to remove its tail
+        if (!growing) {
+            size_t *last_cell = (size_t *) ll_remove_last(&(snake_p->snake_pos));
+
+            size_t *first_cell = (size_t *) ll_get_first(&*snake_p->snake_pos);
+            if (*first_cell != *last_cell) {
+                cells[*last_cell] &= ~FLAG_SNAKE; // only remove snake flag if head isn't on that tile
+            }
+            free(last_cell); // free memory storing cell pos
+        }
+
+    }
+
+    // otherwise, remove snake's tail
+    else {
+        size_t *last_cell = (size_t *) ll_remove_last(&(snake_p->snake_pos));
+
+        size_t *first_cell = (size_t *) ll_get_first(&*snake_p->snake_pos);
+        if (*first_cell != *last_cell) {
+            cells[*last_cell] &= ~FLAG_SNAKE; // only remove snake flag if head isn't on that tile
+        }
+        
+        free(last_cell); // free memory storing cell pos
+    }
+
+    return;
 }
 
 /** Sets a random space on the given board to food.
@@ -57,7 +154,6 @@ void place_food(int* cells, size_t width, size_t height) {
         }
         attempts++;
     }
-
     assert(0 && "ERROR:  No empty or grass-only cells to place food on board.  Are you sure the board has been initialized correctly?");
     /* DO NOT MODIFY THIS FUNCTION */
 }
@@ -67,9 +163,23 @@ void place_food(int* cells, size_t width, size_t height) {
  *  - `write_into`: a pointer to the buffer to be written into.
  */
 void read_name(char* write_into) {
-    // TODO: implement! (remove the call to strcpy once you begin your
-    // implementation)
-    strcpy(write_into, "placeholder");
+    while (1) {
+        printf("Name > ");
+        fflush(stdout);
+
+        ssize_t n = read(0, write_into, 999);
+        if (n <= 0) {
+            fprintf(stderr, "Name Invalid: must be longer than 0 characters.");
+            fflush(stdin);
+            fflush(stderr);
+            continue;
+        };
+
+        write_into[n] = '\0';
+        if (n > 0 && write_into[n-1] == '\n') write_into[n-1] = '\0';
+
+        if (write_into[0] != '\0') return;
+    }
 }
 
 /** Cleans up on game over — should free any allocated memory so that the
@@ -81,6 +191,14 @@ void read_name(char* write_into) {
  */
 void teardown(int* cells, snake_t* snake_p) {  
     // TODO: Free the board
+    free(cells);
 
+    if (!snake_p) return;
+
+    while (snake_p->snake_pos) {
+        void *data = ll_remove_first(&snake_p->snake_pos);
+        free(data);
+    }
+    
     // TODO: implement! (part 3A)
 }

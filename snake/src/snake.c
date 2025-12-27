@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "game.h"
 #include "game_over.h"
@@ -45,13 +46,12 @@ void end_game(int* cells, size_t width, size_t height, snake_t* snake_p) {
     teardown(cells, snake_p);
 
     // ****************** UNCOMMENT THIS CODE IN PART 3B ***********************
-    /*
+    
     // Render final GAME OVER PRESS ANY KEY TO EXIT screen
     render_game_over(width, height);
     usleep(1000 * 1000);  // 1000ms
     cbreak(); // Leave halfdelay mode
     getch();
-    */
 
     // tell ncurses that we're done
     endwin();
@@ -112,23 +112,28 @@ int main(int argc, char** argv) {
 
     // Read in the player's name & save its name and length in global variables
     // TODO: Implement (in Part 3B)
-    // char name_buffer[1000];
-    // read_name(name_buffer);
-    // TODO: save name_buffer 
-    // TODO: save mbslen(name_buffer) 
+    char name_buffer[1000];
+    read_name(name_buffer);
+    
+    g_name = name_buffer;
+    fprintf(stderr, "thing: %s\n", g_name);
+    fflush(stderr);
+    g_name_len = mbslen(g_name);
+    fprintf(stdout, "name len: %zu\n", g_name_len);
 
     // TODO: Remove this message and uncomment the line of code below this message
     //       (part 1A)
-    printf(
-        "             ____   \n"
-        "Hello       / . .\\ \n"
-        "CS 300      \\  ---<\n"
-        "student!     \\  /  \n"
-        "   __________/ /    \n"
-        "-=:___________/\n");
-
-    // initialize_window(width, height);
     // TODO: implement the game loop here (part 1A)!
+
+    while (!g_game_over) {
+        initialize_window(width, height);
+        usleep(100000);
+        enum input_key input = get_input();
+        update(cells, width, height, &snake, input, snake_grows);
+        render_game(cells, width, height);
+
+    }
+
     // TODO: uncomment the line of code below (part 1A)
-    // end_game(cells, width, height, &snake);
+    end_game(cells, width, height, &snake);
 }

@@ -25,6 +25,71 @@
  * You will need bitwise operations for this part of the assignment!
  */
 size_t mbslen(const char* bytes) {
-    // TODO: implement!
-    return 0;
+
+    if (bytes == NULL) {
+        return -1;
+    }
+    
+    size_t num_chars = 0;
+
+    int one_byte_code = 0b0; // right shift by seven for this
+    int two_byte_code = 0b110; // right shift by five
+    int three_byte_code = 0b1110; // right shift by four
+    int four_byte_code = 0b11110; // right shift by three
+    int cont_code = 0b10; // right shift by six
+
+    size_t curr = 0;
+
+    int are_remaining_bytes_valid(size_t *curr_p, size_t num_to_check) {
+        unsigned char curr_byte = (unsigned char) bytes[*curr_p];
+
+        if (num_to_check == 0) return 1;
+
+        if (curr_byte >> 6 == cont_code) {
+            *curr_p += 1;
+            return are_remaining_bytes_valid(curr_p, num_to_check - 1);
+        }
+        else {
+            return 0;
+        }
+    }
+
+    while (bytes[curr] != '\0') {
+        unsigned char curr_byte = (unsigned char) bytes[curr];
+        
+        // decode curr_byte
+        if (curr_byte >> 7 == one_byte_code) {
+            num_chars += 1;
+            curr += 1;
+            continue;
+        }
+        else if (curr_byte >> 5 == two_byte_code) {
+            num_chars += 1;
+            curr += 1;
+            if (!are_remaining_bytes_valid(&curr, 1)) {
+                return -1;
+            }
+            continue;
+        }
+        else if (curr_byte >> 4 == three_byte_code) {
+            num_chars += 1;
+            curr += 1;
+            if (!are_remaining_bytes_valid(&curr, 2)) {
+                return -1;
+            }
+            continue;
+        }
+        else if (curr_byte >> 3 == four_byte_code) {
+            num_chars += 1;
+            curr += 1;
+            if (!are_remaining_bytes_valid(&curr, 3)) {
+                return -1;
+            }
+            continue;
+        }
+        else {
+            return -1;
+        }
+    }
+    return num_chars;
 }

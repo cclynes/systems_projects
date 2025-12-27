@@ -2,6 +2,7 @@
 #define COMMON_H
 
 #include <stddef.h>
+#include "linked_list.h"
 
 // Let's see if we can keep this as simple as possible, lest we intimidate
 // students looking through the provided code.
@@ -34,6 +35,8 @@ enum input_key { INPUT_UP, INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_NONE };
  *  - g_game_over: 1 if game is over, 0 otherwise
  *  - g_score: current game score. Starts at 0. 1 point for every food eaten.
  */
+extern char *g_name;
+extern size_t g_name_len;
 extern int g_game_over;  // 1 if game is over, 0 otherwise
 extern int g_score;      // game score: 1 point for every food eaten
 
@@ -41,9 +44,12 @@ extern int g_score;      // game score: 1 point for every food eaten
  * Fields:
  *  - None yet!
  */
+
+enum snake_direction { UP, DOWN, LEFT, RIGHT };
+
 typedef struct snake {
-    // TODO: Define your snake struct! (part 3A)
-    // Store any necessary information about your snake here.
+    enum snake_direction snake_dir;
+    node_t *snake_pos;
 } snake_t;
 
 void set_seed(unsigned seed);

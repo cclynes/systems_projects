@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #include "game.h"
 #include "common.h"
@@ -91,9 +92,36 @@ enum board_init_status initialize_default_board(int** cells_p, size_t* width_p,
 enum board_init_status initialize_game(int** cells_p, size_t* width_p,
                                        size_t* height_p, snake_t* snake_p,
                                        char* board_rep) {
-    // TODO: implement!
+    
+    
+    // initialize snake
+    snake_p->snake_dir = RIGHT;
+    snake_p->snake_pos = NULL;
+    size_t *start = malloc(sizeof(*start));
+    *start = 42;
+    ll_insert_first(&snake_p->snake_pos, start);
 
-    return INIT_SUCCESS;
+
+    // initialize board
+    enum board_init_status status;
+
+    if (board_rep == NULL) {
+        status = initialize_default_board(cells_p, width_p, height_p);
+        }
+
+    // initialize board via decompression and find snake position
+    else {
+        status = decompress_board_str(cells_p, width_p, height_p, snake_p, board_rep);
+        for (size_t i = 0; i < (*width_p) * (*height_p); i++) {
+            if ((*cells_p)[i] & FLAG_SNAKE) {
+                *start = i;
+                break;
+            }
+        }
+    }
+    place_food(*cells_p, *width_p, *height_p);
+
+    return status;
 }
 
 /** Takes in a string `compressed` and initializes values pointed to by
@@ -109,9 +137,146 @@ enum board_init_status initialize_game(int** cells_p, size_t* width_p,
  * (delineated by the `|` character), and read out a letter (E, S or W) a number
  * of times dictated by the number that follows the letter.
  */
+enum board_init_status set_dimensions(size_t* width_p, size_t* height_p, char* compressed) {
+    int row_dim = 0;
+    int col_dim = 0;
+    bool on_rows = true;
+    
+    // get dimension specs
+    for (size_t i=0; compressed[i] != '|'; i++) {
+        if (compressed[i] == 'B') { continue; }
+        if (compressed[i] == 'x') { on_rows = false; continue; }
+
+        // check that char is a numerical character
+        if ((compressed[i] > '9') || (compressed[i] < '0')) {
+            return INIT_ERR_INCORRECT_DIMENSIONS;
+        }
+
+        if (on_rows) {
+            row_dim = row_dim * 10 + (compressed[i] - 0x30);
+        }
+        else {
+            col_dim = col_dim * 10 + (compressed[i] - 0x30);
+        }
+    }
+
+    // set dimensions and return error status
+    *width_p = col_dim;
+    *height_p = row_dim;
+
+    return INIT_SUCCESS;
+}
+
 enum board_init_status decompress_board_str(int** cells_p, size_t* width_p,
                                             size_t* height_p, snake_t* snake_p,
                                             char* compressed) {
     // TODO: implement!
-    return INIT_UNIMPLEMENTED;
+
+    // set dimensions
+    enum board_init_status set_dims_status = set_dimensions(width_p, height_p, compressed);
+    if (set_dims_status != INIT_SUCCESS) { return set_dims_status; }
+
+    // allocate memory for board
+    *cells_p = malloc((*width_p) * (*height_p) * sizeof(int));
+/*
+    // gets position in cells array given the row and col
+    size_t get_cell_pos(size_t row, size_t col) {
+        if (row >= *(height_p)) {
+            printf("Error: row can\'t be greater than dim");
+            return 0;
+        }
+        if (col >= *(width_p)) {
+            printf("Error: row can\'t be greater than dim");
+            return 0;
+        }
+
+        return (*width_p) * row + col;
+    }
+*/
+    int num_snakes = 0;
+
+    // fill cells with the given flag
+    enum board_init_status fill_cells(size_t start_ind, size_t num_cells, char flag) {
+        for (size_t j = start_ind; j < start_ind + num_cells; j++) {
+            if (j >= (*width_p)*(*height_p)) {
+                printf("filled cells returned incorrect dimensions\n");
+                return INIT_ERR_INCORRECT_DIMENSIONS;
+            }
+
+            switch (flag) {
+                case 'S':
+                    (*cells_p)[j] = FLAG_SNAKE;
+                    num_snakes += 1;
+                    break;
+                case 'E':
+                    (*cells_p)[j] = PLAIN_CELL;
+                    break;
+                case 'G':
+                    (*cells_p)[j] = FLAG_GRASS;
+                    break;
+                case 'W':
+                    (*cells_p)[j] = FLAG_WALL;
+                    break;
+                default:
+                    printf("fill_cells got bad char %c\n", flag);
+                    return INIT_ERR_BAD_CHAR;
+            }
+
+        }
+        return INIT_SUCCESS;
+    }
+
+    // populate the board with the run-length encoding
+    char* compression_str = compressed;
+    strtok(compression_str, "|");
+
+    size_t curr_cell = 0;
+    size_t curr_row;
+
+    for (curr_row = 0; ; curr_row++) {
+        // get next (compressed) row
+        char* row_token = strtok(NULL, "|");
+
+        // break after the last row
+        if (row_token == NULL) {
+            if (curr_row != *height_p) { return INIT_ERR_INCORRECT_DIMENSIONS; }
+            break;
+        }
+        
+        size_t num_cells_in_row = 0;
+        for (size_t ind = 0; row_token[ind] != '\0'; ) {
+
+            char c = row_token[ind++];
+
+            int count = 0;
+            while (('0' <= row_token[ind]) && (row_token[ind] <= '9')) {
+                count = 10 * count + (row_token[ind++] - '0');
+            }
+
+            enum board_init_status status = fill_cells(curr_cell, count, c);
+            if (status != INIT_SUCCESS) {
+                printf("fill_cells returned error %d\n", status);
+                return status;
+            }
+
+            curr_cell += count;
+            num_cells_in_row += count;
+        }
+        
+        // check that row has correct number of cells encoded
+        if (num_cells_in_row != (*width_p)) {
+            printf("wrong number of cells in row error triggered\n");
+            return INIT_ERR_INCORRECT_DIMENSIONS;
+        }
+    }
+
+    if (num_snakes != 1) {
+        return INIT_ERR_WRONG_SNAKE_NUM;
+    }
+
+    if (curr_row != *height_p) {
+        return INIT_ERR_INCORRECT_DIMENSIONS;
+    }
+
+    return INIT_SUCCESS;
 }
