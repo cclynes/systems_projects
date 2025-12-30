@@ -1,5 +1,5 @@
 # Default optimization level
-OPT ?= -O2
+OPT ?= -O0
 
 # Flags
 CXXFLAGS := -std=gnu++1z -W -Wall -Wshadow  -Wno-unused-command-line-argument -Werror -g $(OPT) $(DEFS) $(CXXFLAGS)

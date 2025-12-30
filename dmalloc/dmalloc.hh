@@ -57,6 +57,20 @@ struct dmalloc_stats {
     uintptr_t heap_max;                 // largest allocated addr
 };
 
+extern struct dmalloc_stats g_stats;
+
+#define IS_ALLOC 0xf4ba49d1
+#define BOUND_VAL 0x185a4b2f
+
+typedef struct alloc_info {
+    uintptr_t ptr_val;
+    size_t alloc_size;
+    unsigned int is_allocated;
+    size_t padding;
+    const char* file;
+    long line;
+} alloc_info_t;
+
 /**
  * get_statistics(stats)
  *      fill a dmalloc_stats pointer with the current memory statistics
