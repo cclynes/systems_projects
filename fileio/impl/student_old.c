@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "../io300.h"
@@ -29,8 +30,6 @@
 // Prototypes for helper functions defined later
 int fetch(struct io300_file* const f);
 int flush(struct io300_file* const f);
-size_t min(size_t a, size_t b);
-size_t max(size_t a, size_t b);
 
 /*
  * This macro enables/disables the dbg() function. Use it to silence your
@@ -51,9 +50,8 @@ struct io300_file {
     size_t cache_idx; // cache-relative read/write head
     size_t cache_valid; // start of invalid portion of the cache - used if fetch doesn't write into the whole cache
 
-    char is_dirty;
-
-    off_t file_size;
+    size_t dirty_start;
+    size_t dirty_end;
 
     /* Used for debugging, keep track of which io300_file is which */
     char* description;
@@ -74,9 +72,7 @@ static void check_invariants(struct io300_file* f) {
     assert(f != NULL);
     assert(f->cache != NULL);
     assert(f->fd >= 0);
-    assert(f->cache_valid <= CACHE_SIZE);
-    assert(f->cache_pos % CACHE_SIZE == 0);
-    assert(f->cache_idx <= CACHE_SIZE);
+    assert(f->dirty_end <= f->cache_valid); // we should never have unwritten portions of the cache that are also invalid
 
     // TODO: Add more invariants
 }
@@ -155,14 +151,12 @@ struct io300_file* io300_open(const char* const path, int mode, char* descriptio
     ret->stats.seeks = 0;
 
     // initialize metadata
-    ret->file_size = lseek(ret->fd, 0, SEEK_END); if (ret->file_size < 0) { return NULL; }
     ret->cache_pos = 0;
     ret->cache_idx = 0;
-    ret->cache_valid = min(ret->file_size, CACHE_SIZE);
-    ret->is_dirty = 0;
-
-    // seek back to start
-    off_t rc = lseek(ret->fd, 0, SEEK_SET); if (rc < 0) { return NULL; }
+    ret->cache_valid = CACHE_SIZE + 1;
+    
+    ret->dirty_start = 0;
+    ret->dirty_end = 0;
 
     // initialize the cache
     int bytes_fetched = fetch(ret);
@@ -176,6 +170,16 @@ struct io300_file* io300_open(const char* const path, int mode, char* descriptio
     return ret;
 }
 
+size_t min(size_t a, size_t b) {
+    if (a < b) { return a; }
+    return b;
+}
+
+size_t max(size_t a, size_t b) {
+    if (a > b) { return a; }
+    return b;
+}
+
 int io300_seek(struct io300_file* const f, off_t const pos) {
     check_invariants(f);
     f->stats.seeks++;
@@ -183,18 +187,47 @@ int io300_seek(struct io300_file* const f, off_t const pos) {
     if (pos < 0) { return -1; }
 
     // if we can seek within the cache, do so
-    if ((f->cache_pos <= (off_t) pos) && ((off_t) pos < f->cache_pos + (off_t) CACHE_SIZE)) {
+    if (f->cache_pos <= (off_t) pos && (off_t) pos < f->cache_pos + (off_t) min(f->cache_valid, CACHE_SIZE)) {
         f->cache_idx = (size_t) pos - f->cache_pos;
         return (int) pos;
     }
 
-    // flush cache and relocate
+    // update metadata
     flush(f);
     off_t block_pos = pos - (pos % CACHE_SIZE);
     f->cache_pos = block_pos;
     f->cache_idx = (size_t) (pos % CACHE_SIZE);
-    fetch(f);
 
+    // if seek is beyond EOF, fill bytes from EOF to seek point with 0x00
+    off_t file_end = lseek(f->fd, 0, SEEK_END);
+    if (file_end < 0) { return file_end; }
+    
+    off_t distance_to_end = file_end - pos;
+    if (distance_to_end < 0) {
+
+        size_t num_bytes_to_fill = (size_t) (pos - file_end);
+        char buf[num_bytes_to_fill];
+        memset(buf, 0, num_bytes_to_fill);
+
+        ssize_t write_rc = io300_write(f, (const char *)buf, num_bytes_to_fill); // io300_write updates f->cache_valid, so we don't have to
+        if (write_rc <= 0) { return -1; }
+    }
+
+    // otherwise, just seek and fetch from file, and update metadata
+    else {
+        off_t seek_res = lseek(f->fd, pos, SEEK_SET);
+        if (seek_res < 0) { return seek_res; }
+
+        if (distance_to_end >= CACHE_SIZE) {
+            f->cache_valid = CACHE_SIZE + 1;
+        }
+        else {
+            f->cache_valid = distance_to_end;
+        }
+        
+        int fetch_res = fetch(f);
+        if (fetch_res < 0) {return fetch_res; }
+    }
     return pos;
 }
 
@@ -239,7 +272,7 @@ int io300_readc(struct io300_file* const f) {
 
     unsigned char ch;
     ssize_t res = io300_read(f, (char *) &ch, 1);
-    if (res <= 0) {
+    if (res < 0) {
         return -1;
     }
     return (int) ch;
@@ -260,20 +293,19 @@ int io300_writec(struct io300_file* f, int ch) {
 // assumes buff points to at least sz bytes of accessible memory
 ssize_t io300_read(struct io300_file* const f, char* const buff,
                    size_t const sz) {
-    f->stats.read_calls++;
     check_invariants(f);
-
-    // return without reading if we're at/past EOF
-    if (f->cache_pos + f->cache_idx >= (size_t) f->file_size) { return 0; }
 
     // check how much we can read from the cache
     size_t bytes_until_cache_end = CACHE_SIZE - f->cache_idx;
+    size_t readable_bytes = min(sz, bytes_until_cache_end);
 
-    size_t avail = 0;
-    if (f->cache_idx < f->cache_valid) {
-        avail = f->cache_valid - f->cache_idx;
+    size_t bytes_until_invalid = f->cache_valid - f->cache_idx;
+    readable_bytes = min(readable_bytes, bytes_until_invalid);
+
+    // if we've hit EOF, return without reading
+    if (bytes_until_invalid == 0) {
+        return -1;
     }
-    size_t readable_bytes = min(sz, min(bytes_until_cache_end, avail));
 
     // read whatever we can from the cache
     if (readable_bytes > 0) {
@@ -281,152 +313,160 @@ ssize_t io300_read(struct io300_file* const f, char* const buff,
     }
 
     // if we've read everything requested or hit file end, update metadata and return
-    if (readable_bytes == sz || f->cache_pos + f->cache_idx + readable_bytes == (size_t) f->file_size) {
+    if (readable_bytes == sz || readable_bytes == bytes_until_invalid) {
         f->cache_idx += readable_bytes;
-
-        // if we've hit cache end, flush, update metadata, and return
-        if (f->cache_idx == CACHE_SIZE) {
-            int flush_res = flush(f); if (flush_res < 0) { return flush_res; }
-            f->cache_pos += CACHE_SIZE;
-            f->cache_idx = 0;
-            int fetch_res = fetch(f); if (fetch_res < 0) { return fetch_res; }\
-        }
         return readable_bytes;
     }
 
-    // otherwise, flush, update metadata, fetch, and continue the read
-    int flush_res = flush(f); if (flush_res < 0) { return flush_res; }
-    f->cache_pos += CACHE_SIZE;
-    f->cache_idx = 0;
-    int fetch_res = fetch(f); if (fetch_res < 0) { return fetch_res; }
+    // otherwise, fetch the next segment
+    int fetch_res = fetch(f); // note that fetch also flushes if needed
+    if (fetch_res < 0) { return fetch_res; }
 
-    return readable_bytes + io300_read(f, buff + readable_bytes, sz - readable_bytes);
+    // fetch updates the metadata, so now we can just continue with the read
+    return io300_read(f, buff + readable_bytes, sz - readable_bytes);
 }
-
 ssize_t io300_write(struct io300_file* const f, const char* buff,
                     size_t const sz) {
-    f->stats.write_calls++;
     check_invariants(f);
 
-    // if over EOF, fill in hole and update file_size
-    if ((size_t) f->file_size < f->cache_pos + f->cache_idx) {
+    size_t bytes_until_cache_end = CACHE_SIZE - f->cache_idx;
+    size_t writable_bytes = min(sz, bytes_until_cache_end);
 
-        // avoid overwriting valid file bytes if EOF is in cache
-        size_t eof_idx = 0;
-        if (f->file_size > f->cache_pos) {
-            eof_idx = f->file_size - f->cache_pos;
-        }
-
-        if (f->cache_idx > eof_idx) {
-            memset(f->cache + eof_idx, 0, f->cache_idx - eof_idx);
-            f->is_dirty = 1;
-        }
-
-        // fill all bytes before the cache start
-        if (eof_idx == 0) {
-            off_t seek_rc = lseek(f->fd, f->file_size, SEEK_SET); if (seek_rc < 0) { return seek_rc; }
-            size_t bytes_to_fill = f->cache_pos - f->file_size;
-            char temp[bytes_to_fill];
-            memset(temp, 0, bytes_to_fill);
-            ssize_t write_rc = write(f->fd, temp, bytes_to_fill); if (write_rc < 0) { return write_rc; }
-        }
-
-        f->file_size = f->cache_pos + f->cache_idx;
+    int bytes_until_clean = (ssize_t) f->dirty_end - (ssize_t) f->cache_idx; // if < 0, we don't have to worry about dirty reads
+    size_t bytes_until_dirty;
+    if (bytes_until_clean <= 0) {
+        bytes_until_dirty = sz;
     }
+    else {
+        bytes_until_dirty = max(0, (ssize_t) f->dirty_start - (ssize_t) f->cache_idx);
+    }
+    writable_bytes = min(writable_bytes, bytes_until_dirty);
 
-    // write whatever we can to the cache and mark dirty; update cache_idx, cache_valid
-    size_t writable_bytes = min(sz, CACHE_SIZE - f->cache_idx);
-
+    // write whatever we can to the cache and update dirty bounds, cache_idx, cache_valid
     if (writable_bytes > 0) {
         memcpy(f->cache + f->cache_idx, buff, writable_bytes);
 
-        f->is_dirty = 1;
+        if (f->dirty_end <= f->dirty_start) {
+            f->dirty_start = f->cache_idx;
+            f->dirty_end = f->cache_idx + writable_bytes;
+        }
+        else {
+            f->dirty_start = min(f->dirty_start, f->cache_idx);
+            f->dirty_end = max(f->dirty_end, f->cache_idx + writable_bytes);
+        }
+
         f->cache_valid = max(f->cache_valid, f->cache_idx + writable_bytes);
-    }
-
-    // if we've want to write over EOF, update file_size
-    size_t potential_new_sz = f->cache_pos + f->cache_idx + sz;
-    char are_past_eof = ((size_t) f->file_size < potential_new_sz);
-    if (are_past_eof) {
-        f->file_size = potential_new_sz;
-    }
-
-    // if we've filled the cache, flush and update metadata; and fetch if not past EOF
-    if (f->cache_idx + writable_bytes == CACHE_SIZE) {
-        flush(f);
-        f->cache_pos += CACHE_SIZE;
-        f->cache_idx = 0;
-        f->cache_valid = 0;
-
-        if (f->file_size > f->cache_pos) { fetch(f); }
-    }
-
-    // otherwise, just update metadata
-    else {
+        if (f->cache_valid == CACHE_SIZE) {
+            f->cache_valid += 1;
+        }
         f->cache_idx += writable_bytes;
     }
 
-    // if we've written everything requested, return
+    // if we've written over EOF, extend cache_valid
+    int are_over_eof = (f->cache_idx > f->cache_valid);
+    if (are_over_eof) {
+        f->cache_valid = f->cache_idx;
+        if (f->cache_idx == CACHE_SIZE) {
+            f->cache_valid += 1;
+        }
+    }
+
+    // if we've written everything requested, update metadata and return
     if (writable_bytes == sz) {
         return (ssize_t) writable_bytes;
     }
 
-    // otherwise, continue writing
+    // if not over EOF, fetch the next segment (which also flushes the current one and updates metadata)
+    if (!are_over_eof) {
+        int fetch_rc = fetch(f);
+        if (fetch_rc < 0) { return fetch_rc; }
+    }
+
+    // if over EOF, flush the segment but don't fetch; update metadata
+    else {
+        int flush_rc = flush(f); if (flush_rc < 0) { return flush_rc; }
+        memset(f->cache, 0, CACHE_SIZE);
+    }
+
     return writable_bytes + io300_write(f, buff + writable_bytes, sz - writable_bytes);
 }
 
 // flushes cache
-// increments kernel offset by size of cache
+// upon returning, should restore kernel offset to its value at time of call
 int flush(struct io300_file* const f) {
     check_invariants(f);
     
-    if (!f->is_dirty) { return 0; }
 
-    // jump to the proper place in file
-    off_t offset = lseek(f->fd, f->cache_pos, SEEK_SET);
-    if (offset < 0) { return (int) offset; }
+    if (f->dirty_end <= f->dirty_start) {
+        return 0;
+    }
+
+    // store offset and jump to the proper place in file
+    off_t logical = f->cache_pos + f->cache_idx;
+    if (logical < 0) { return -1; }
+    off_t offset = lseek(f->fd, f->cache_pos + f->dirty_start, SEEK_SET); // TODO: exchange with io300 seek
+    if (offset < 0) {
+        return (int)offset;
+    }
 
     // make sys call to write
     size_t count = 0;
-    while (count < f->cache_valid) {
-        ssize_t bytes_written = write(f->fd, f->cache + count, f->cache_valid - count);
-        if (bytes_written <= 0) { return -1; }
+    size_t dirty_size = f->dirty_end - f->dirty_start;
+    while (count < dirty_size) {
+        ssize_t bytes_written = write(f->fd, f->cache + f->dirty_start + count, dirty_size - count);
+
+        if (bytes_written <= 0) {
+            lseek(f->fd, logical, SEEK_SET);
+            return -1;
+        }
 
         count += bytes_written;
     }
 
-    // mark as clean
-    f->is_dirty = 0;
+    // reset kernel offset and dirty pointers
+    off_t new_idx = lseek(f->fd, logical, SEEK_SET); // TODO: exchange with io300 seek
+    if (new_idx < 0) { return -1; }
+    f->dirty_start = 0;
+    f->dirty_end = 0;
 
     return 0;
 }
 
 // fetches data from the file
+// increments kernel offset by no. bytes fetched
 int fetch(struct io300_file* const f) {
     check_invariants(f);
-
-    if (f->cache_pos >= f->file_size) {
-        f->cache_valid = 0;
-        return 0;
+    
+    // flush cache first, if dirty
+    if (f->dirty_start < f->dirty_end) {
+        int res = flush(f);
+        if (res < 0) { return -1; }
     }
 
+    off_t start = f->cache_pos;
+    if (start < 0) {return -1; }
+    
+    // read from file
+    size_t count = 0;
+    while (count < CACHE_SIZE) {
+        off_t seek_rc = lseek(f->fd, start + count, SEEK_SET); if (seek_rc < 0) { return -1; }
+        ssize_t res = read(f->fd, f->cache + count, CACHE_SIZE - count);
+        if (res < 0) {
+            return res;
+        }
+        if (res == 0) {
+            break;
+        }
+        count += res;
+    }
 
-    // jump to proper place and read from file
-    off_t seek_rc = lseek(f->fd, f->cache_pos, SEEK_SET); if (seek_rc < 0) { return -1; }
-    ssize_t res = read(f->fd, f->cache, CACHE_SIZE); if (res < 0) { return res; }
+    // update metadata
+    f->cache_valid = count;
+    if (f->cache_valid == CACHE_SIZE) {
+        f->cache_valid += 1;
+    }
+    f->cache_pos = start;
+    f->cache_idx = 0;
 
-    // jump back and update metadata
-    f->cache_valid = (size_t)res;
-    return (int) res;
-}
-
-
-size_t min(size_t a, size_t b) {
-    if (a < b) { return a; }
-    return b;
-}
-
-size_t max(size_t a, size_t b) {
-    if (a > b) { return a; }
-    return b;
+    return count;
 }

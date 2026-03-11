@@ -21,12 +21,26 @@ int main() {
     char c1 = io300_readc(f);
     char c2 = io300_readc(f);
     char c3 = io300_readc(f);
+    char c4 = io300_readc(f);
+    char c5 = io300_readc(f);
+    char c6 = io300_readc(f);
+    char c7 = io300_readc(f);
+    char c8 = io300_readc(f);
+    char c9 = io300_readc(f);
+    char c10 = io300_readc(f);
 
     // Make sure the results from readc are what we expect
-    printf("%d", c1);
     assert(c1 == 'h');
     assert(c2 == 'e');
     assert(c3 == 'l');
+    assert(c4 == 'l');
+    assert(c5 == 'o');
+    assert(c6 == ' ');
+    assert(c7 == 'w');
+    assert(c8 == 'o');
+    assert(c9 == 'r');
+    assert(c10 == 'l');
+
 
     // Close the file
     io300_close(f);
