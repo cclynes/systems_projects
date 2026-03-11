@@ -44,6 +44,7 @@ class DbMap {
 
   // Bucket associative array, with corresponding mutexes to protect access.
   std::array<std::list<DbItem>, BUCKET_COUNT> buckets;
+  std::array<std::shared_mutex, BUCKET_COUNT> shared_mtxs;
 
   // TODO (Part A, Step 4): You will need to add fields to synchronize access to
   // the hashmap buckets!

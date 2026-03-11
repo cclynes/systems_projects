@@ -23,8 +23,8 @@ class SimpleKvStore : public KvStore {
   std::vector<std::string> AllKeys() override;
 
  private:
-  // TODO (Part A, Step 1 and Step 2): Implement your internal key-value store
-  // here! You might need to add fields to synchronize access.
+  std::mutex mtx;
+  std::unordered_map<std::string, std::string> store_;
 };
 
-#endif /* end of include guard */
+#endif
