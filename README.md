@@ -1,4 +1,4 @@
-CS 300 Projects
+Computer Systems Projects
 ===============
 
 This repository contains five projects inspired by assignments in Brown's Computer Systems class. Stencil code was cloned from the Github repositories. I completed these projects independent of the class, out of interest in computer systems and a desire to get a rigorous standard introduction to the fundamentals of computer systems.
