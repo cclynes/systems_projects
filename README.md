@@ -12,3 +12,7 @@ The projects are:
 
 For more information about the class these projects were assigned in:
 http://cs300.systems/
+
+
+### What I wrote
+Because these were class projects, much of the stencil code, including tests, were not written by me. This allowed me to focus on learning systems concepts without getting bogged down in setup details, but only code committed by me should be taken as mine. On the other hand, since the purpose of these projects was learning, I consulted AI for some design and conceptual questions but all of my code was written by hand with my full understanding.
